@@ -1,6 +1,6 @@
 import subprocess
 
-interface = "1"
+interface = "5"
 duration = "10"
 output_file = "capture.pcapng"
 
