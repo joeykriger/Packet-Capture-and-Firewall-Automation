@@ -52,13 +52,13 @@ nc -l -p 8080
 **On the Windows 11 VM:**
 Open PowerShell **as Administrator** and run the following commands to create a complex, broken firewall state:
 ```powershell
-# 1. An overly broad deny rule blocking the app port
-New-NetFirewallRule -DisplayName "Block_App_Port" -Direction Outbound -LocalPort 8080 -Protocol TCP -Action Block
+# 1. Block outbound TCP traffic destined for remote port 8080
+New-NetFirewallRule -DisplayName "Block_App_Port" -Direction Outbound -RemotePort 8080 -Protocol TCP -Action Block
 
-# 2. A misleading allow rule (Applies to UDP instead of TCP)
-New-NetFirewallRule -DisplayName "Allow_Company_App" -Direction Outbound -LocalPort 8080 -Protocol UDP -Action Allow
+# 2. Misleading allow rule (applies to UDP instead of TCP on remote port 8080)
+New-NetFirewallRule -DisplayName "Allow_Company_App" -Direction Outbound -RemotePort 8080 -Protocol UDP -Action Allow
 
-# 3. An incorrect inbound rule
+# 3. Incorrect inbound rule (Inbound rules correctly use LocalPort for listening ports)
 New-NetFirewallRule -DisplayName "Inbound_App_Traffic" -Direction Inbound -LocalPort 80 -Protocol TCP -Action Block
 ```
 
@@ -175,6 +175,7 @@ With your scripts built, test the user's claim:
 4. Open the resulting `.pcapng` in the Wireshark GUI.
 
 **Troubleshooting Prompts:**
+*   **Are you capturing on the right interface:** Run tshark -D and confirm that the interface matches what is on the capture_launcher.py sript.
 *   **Layer 3 vs Layer 4:** Is there an ARP request/reply? Is there an ICMP echo request/reply? This confirms Layers 2 and 3 are working. 
 *   **The TCP Handshake:** Filter your capture by `tcp.port == 8080`. Do you see a SYN packet leaving the Windows VM? 
 *   *If no SYN packet is on the wire, but Layer 3 works, what component on the host OS drops traffic before it hits the virtual wire?* (Answer: Host Firewall).
@@ -193,7 +194,8 @@ import subprocess
 
 print("Auditing Windows Defender Firewall for rules affecting port 8080...")
 
-ps_cmd = "Get-NetFirewallRule | Where-Object {$_.LocalPort -eq '8080'} | Select-Object DisplayName, Direction, Action, Protocol | Format-Table"
+# Check both RemotePort and LocalPort so no rules are missed
+ps_cmd = "Get-NetFirewallRule | Where-Object {$_.RemotePort -eq '8080' -or $_.LocalPort -eq '8080'} | Select-Object DisplayName, Direction, Action, Protocol | Format-Table"
 
 result = subprocess.run(['powershell', '-Command', ps_cmd], capture_output=True, text=True)
 
@@ -224,7 +226,7 @@ commands = [
     "Disable-NetFirewallRule -DisplayName 'Allow_Company_App' -ErrorAction SilentlyContinue",
     
     # 3. Add the correct outbound rule for TCP 8080
-    "New-NetFirewallRule -DisplayName 'Allow_Ubuntu_App' -Direction Outbound -LocalPort 8080 -Protocol TCP -Action Allow"
+    "New-NetFirewallRule -DisplayName 'Allow_Ubuntu_App' -Direction Outbound -RemotePort 8080 -Protocol TCP -Action Allow"
 ]
 
 for cmd in commands:
