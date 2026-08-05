@@ -190,20 +190,42 @@ With your scripts built, test the user's claim:
 *Identify the overly broad deny rule and the misleading UDP allow rule.*
 
 ```python
-import subprocess
+import subprocess 
 
 print("Auditing Windows Defender Firewall for rules affecting port 8080...")
 
-# Check both RemotePort and LocalPort so no rules are missed
-ps_cmd = "Get-NetFirewallRule | Where-Object {$_.RemotePort -eq '8080' -or $_.LocalPort -eq '8080'} | Select-Object DisplayName, Direction, Action, Protocol | Format-Table"
+# 1. Get the port filters matching 8080
+# 2. Pipeline them to Get-NetFirewallRule to fetch the display names and actions
+# 3. Create a custom PSCustomObject to combine both Rule and Port Filter properties for output
+ps_cmd = (
+    "Get-NetFirewallRule | ForEach-Object { "
+    "  $rule = $_; "
+    "  $pf = $rule | Get-NetFirewallPortFilter; "
+    "  if ((($pf.LocalPort -join ',') -match '8080') -or (($pf.RemotePort -join ',') -match '8080')) { "
+    "    [PSCustomObject]@{ "
+    "      DisplayName = $rule.DisplayName; "
+    "      Direction   = $rule.Direction; "
+    "      Action      = $rule.Action; "
+    "      Protocol    = $pf.Protocol; "
+    "      LocalPort   = ($pf.LocalPort -join ','); "
+    "      RemotePort  = ($pf.RemotePort -join ',') "
+    "    } "
+    "  } "
+    "} | Format-Table -AutoSize"
+)
 
-result = subprocess.run(['powershell', '-Command', ps_cmd], capture_output=True, text=True)
+result = subprocess.run(['powershell', '-NoProfile', '-Command', ps_cmd], capture_output=True, text=True)
 
 print("\n--- Firewall Audit Results ---")
 if result.stdout.strip():
     print(result.stdout)
 else:
+    # Provide stderr and exit code to diagnose PowerShell errors
     print("No rules found affecting port 8080.")
+    if result.stderr.strip():
+        print("\nPowerShell stderr:")
+        print(result.stderr)
+    print(f"\nPowerShell exit code: {result.returncode}")
 ```
 
 ### Script 5: Firewall Rule Creator (`firewall_manager.py`)
