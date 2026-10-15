@@ -190,42 +190,90 @@ With your scripts built, test the user's claim:
 *Identify the overly broad deny rule and the misleading UDP allow rule.*
 
 ```python
-import subprocess 
+import subprocess
 
-print("Auditing Windows Defender Firewall for rules affecting port 8080...")
+target_port = 8080
+timeout_seconds = 60
+
+print(f"Auditing Windows Defender Firewall for rules affecting port {target_port}...")
 
 # 1. Get the port filters matching 8080
-# 2. Pipeline them to Get-NetFirewallRule to fetch the display names and actions
+# 2. Add them to Get-NetFirewallRule to fetch the display names and actions
 # 3. Create a custom PSCustomObject to combine both Rule and Port Filter properties for output
-ps_cmd = (
-    "Get-NetFirewallRule | ForEach-Object { "
-    "  $rule = $_; "
-    "  $pf = $rule | Get-NetFirewallPortFilter; "
-    "  if ((($pf.LocalPort -join ',') -match '8080') -or (($pf.RemotePort -join ',') -match '8080')) { "
-    "    [PSCustomObject]@{ "
-    "      DisplayName = $rule.DisplayName; "
-    "      Direction   = $rule.Direction; "
-    "      Action      = $rule.Action; "
-    "      Protocol    = $pf.Protocol; "
-    "      LocalPort   = ($pf.LocalPort -join ','); "
-    "      RemotePort  = ($pf.RemotePort -join ',') "
-    "    } "
-    "  } "
-    "} | Format-Table -AutoSize"
-)
+ps_cmd = f"""
+$ErrorActionPreference = 'Stop'
+$targetPort = {target_port}
 
-result = subprocess.run(['powershell', '-NoProfile', '-Command', ps_cmd], capture_output=True, text=True)
+function Test-PortMatch {{
+    param([object[]]$PortValues, [int]$TargetPort)
+
+    foreach ($value in $PortValues) {{
+        foreach ($entry in ([string]$value -split ',')) {{
+            $entry = $entry.Trim()
+            if ($entry -eq [string]$TargetPort) {{
+                return $true
+            }}
+
+            $range = [regex]::Match($entry, '^(\\d+)-(\\d+)$')
+            if ($range.Success) {{
+                $rangeStart = [int]$range.Groups[1].Value
+                $rangeEnd = [int]$range.Groups[2].Value
+                if ($TargetPort -ge $rangeStart -and $TargetPort -le $rangeEnd) {{
+                    return $true
+                }}
+            }}
+        }}
+    }}
+
+    return $false
+}}
+
+$portFilters = Get-NetFirewallPortFilter -PolicyStore ActiveStore
+$results = foreach ($pf in $portFilters) {{
+    if ((Test-PortMatch -PortValues $pf.LocalPort -TargetPort $targetPort) -or
+        (Test-PortMatch -PortValues $pf.RemotePort -TargetPort $targetPort)) {{
+        $rules = Get-NetFirewallRule -AssociatedNetFirewallPortFilter $pf -PolicyStore ActiveStore
+        foreach ($rule in $rules) {{
+            [PSCustomObject]@{{
+                DisplayName = $rule.DisplayName
+                Direction = $rule.Direction
+                Action = $rule.Action
+                Protocol = $pf.Protocol
+                LocalPort = ($pf.LocalPort -join ',')
+                RemotePort = ($pf.RemotePort -join ',')
+            }}
+        }}
+    }}
+}}
+
+$results | Sort-Object DisplayName, Direction, Action, Protocol, LocalPort, RemotePort -Unique | Format-Table -AutoSize
+"""
 
 print("\n--- Firewall Audit Results ---")
-if result.stdout.strip():
-    print(result.stdout)
-else:
-    # Provide stderr and exit code to diagnose PowerShell errors
-    print("No rules found affecting port 8080.")
+try:
+    result = subprocess.run(
+        ['powershell', '-NoProfile', '-Command', ps_cmd],
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+    )
+except subprocess.TimeoutExpired:
+    print(f"Firewall audit timed out after {timeout_seconds} seconds.")
+    raise SystemExit(1)
+# Provide stderr and exit code to diagnose PowerShell errors
+if result.returncode != 0:
+    if result.stdout.strip():
+        print(result.stdout)
     if result.stderr.strip():
         print("\nPowerShell stderr:")
         print(result.stderr)
     print(f"\nPowerShell exit code: {result.returncode}")
+    raise SystemExit(result.returncode)
+
+if result.stdout.strip():
+    print(result.stdout)
+else:
+    print(f"No rules found affecting port {target_port}.")
 ```
 
 ### Script 5: Firewall Rule Creator (`firewall_manager.py`)
@@ -241,14 +289,9 @@ import subprocess
 print("Implementing firewall resolutions...")
 
 commands = [
-    # 1. Disable the overly broad deny rule
     "Disable-NetFirewallRule -DisplayName 'Block_App_Port' -ErrorAction SilentlyContinue",
-    
-    # 2. Disable the misleading UDP allow rule
     "Disable-NetFirewallRule -DisplayName 'Allow_Company_App' -ErrorAction SilentlyContinue",
-    
-    # 3. Add the correct outbound rule for TCP 8080
-    "New-NetFirewallRule -DisplayName 'Allow_Ubuntu_App' -Direction Outbound -RemotePort 8080 -Protocol TCP -Action Allow"
+    "Disable-NetFirewallRule -DisplayName 'Inbound_App_Traffic' -ErrorAction SilentlyContinue", 
 ]
 
 for cmd in commands:

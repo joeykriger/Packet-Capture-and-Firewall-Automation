@@ -5,7 +5,7 @@ print("Implementing firewall resolutions...")
 commands = [
     "Disable-NetFirewallRule -DisplayName 'Block_App_Port' -ErrorAction SilentlyContinue",
     "Disable-NetFirewallRule -DisplayName 'Allow_Company_App' -ErrorAction SilentlyContinue",
-    "New-NetFirewallRule -DisplayName 'Allow_Ubuntu_App' -Direction Outbound -RemotePort 8080 -Protocol TCP -Action Allow"
+    "Disable-NetFirewallRule -DisplayName 'Inbound_App_Traffic' -ErrorAction SilentlyContinue", 
 ]
 
 for cmd in commands:
